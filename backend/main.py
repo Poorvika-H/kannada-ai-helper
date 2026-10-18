@@ -1,12 +1,14 @@
 from dotenv import load_dotenv
 load_dotenv()  # reads ANTHROPIC_API_KEY from backend/.env
 
-import anthropic
+from google import genai
+from google.genai import types
 from fastapi import FastAPI
 from pydantic import BaseModel
 
 app = FastAPI()
-client = anthropic.Anthropic()  # picks up ANTHROPIC_API_KEY automatically
+client = genai.Client()  # reads GEMINI_API_KEY automatically
+MODEL = "gemini-flash-latest"
 
 PROMPTS = {
     "kn": (
@@ -36,10 +38,18 @@ def health():
 
 @app.post("/chat")
 def chat(req: ChatRequest):
-    response = client.messages.create(
-        model="claude-sonnet-5-5",
-        max_tokens=1000,
-        system=PROMPTS.get(req.lang, PROMPTS["kn"]),
-        messages=req.messages,
+    contents = [
+        types.Content(
+            role="model" if m["role"] == "assistant" else "user",
+            parts=[types.Part(text=m["content"])],
+        )
+        for m in req.messages
+    ]
+    response = client.models.generate_content(
+        model=MODEL,
+        contents=contents,
+        config=types.GenerateContentConfig(
+            system_instruction=PROMPTS.get(req.lang, PROMPTS["kn"])
+        ),
     )
-    return {"reply": response.content[0].text}
+    return {"reply": response.text}
