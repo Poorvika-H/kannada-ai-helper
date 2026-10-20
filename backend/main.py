@@ -3,7 +3,7 @@ load_dotenv()  # reads ANTHROPIC_API_KEY from backend/.env
 
 from google import genai
 from google.genai import types
-from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 app = FastAPI()
@@ -32,6 +32,11 @@ class ChatRequest(BaseModel):
 
 
 @app.get("/")
+def home():
+    return FileResponse("index.html")
+
+
+@app.get("/health")
 def health():
     return {"status": "ok"}
 
