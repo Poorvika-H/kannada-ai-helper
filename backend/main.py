@@ -4,6 +4,7 @@ load_dotenv()  # reads ANTHROPIC_API_KEY from backend/.env
 from google import genai
 from google.genai import types
 from fastapi import FastAPI
+from pathlib import Path
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
