@@ -1,8 +1,10 @@
+import time
+
 from dotenv import load_dotenv
 load_dotenv()  # reads GEMINI_API_KEY from backend/.env when running locally
 
 from google import genai
-from google.genai import types
+from google.genai import types, errors
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -32,12 +34,12 @@ class ChatRequest(BaseModel):
     messages: list[dict]
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def home():
     return HTMLResponse(INDEX_HTML)
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health():
     return {"status": "ok"}
 
@@ -51,14 +53,22 @@ def chat(req: ChatRequest):
         )
         for m in req.messages
     ]
-    response = client.models.generate_content(
-        model=MODEL,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            system_instruction=PROMPTS.get(req.lang, PROMPTS["kn"])
-        ),
-    )
-    return {"reply": response.text}
+    for attempt in range(3):
+        try:
+            response = client.models.generate_content(
+                model=MODEL,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=PROMPTS.get(req.lang, PROMPTS["kn"])
+                ),
+            )
+            return {"reply": response.text}
+        except errors.APIError as e:
+            # Temporary problems (busy or rate limited): wait and try again
+            if e.code in (429, 500, 503, 504) and attempt < 2:
+                time.sleep(2 * (attempt + 1))  # wait 2s, then 4s
+                continue
+            raise
 
 
 INDEX_HTML = r"""<!DOCTYPE html>
@@ -126,10 +136,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
 <script>
 const UI = {
   kn: { title: "ನಿಮ್ಮ ಸಹಾಯಕ", hint: "ನಿಮ್ಮ ಪ್ರಶ್ನೆ ಇಲ್ಲಿ ಬರೆಯಿರಿ", send: "ಕಳುಹಿಸಿ",
-        empty: "ನಿಮಗೆ ಏನು ತಿಳಿಯಬೇಕು? ಕೇಳಿ.", wait: "ಸ್ವಲ್ಪ ಕಾಯಿರಿ...",
+        empty: "ನಿಮಗೆ ಏನು ತಿಳಿಯಬೇಕು? ಕೇಳಿ.",
+        wait: "ಸ್ವಲ್ಪ ಕಾಯಿರಿ... (ಮೊದಲ ಬಾರಿ 1 ನಿಮಿಷ ಆಗಬಹುದು)",
         error: "ಏನೋ ತೊಂದರೆ ಆಯಿತು. ಇಂಟರ್ನೆಟ್ ನೋಡಿ, ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ." },
   en: { title: "Study Helper", hint: "Type your question here", send: "Send",
-        empty: "What would you like to learn today?", wait: "One moment...",
+        empty: "What would you like to learn today?",
+        wait: "One moment... (the first reply can take a minute)",
         error: "Something went wrong. Check your internet and try again." }
 };
 
@@ -185,11 +197,14 @@ async function send() {
   render();
   addBubble(UI[lang].wait, "bot wait");
 
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 90000);  // give up after 90 seconds
   try {
     const res = await fetch("/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ lang, messages })
+      body: JSON.stringify({ lang, messages }),
+      signal: ctrl.signal
     });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
@@ -197,6 +212,7 @@ async function send() {
   } catch (e) {
     messages.push({ role: "assistant", content: UI[lang].error });
   } finally {
+    clearTimeout(timer);
     loading = false;
     sendBtn.disabled = false;
     render();
